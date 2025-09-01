@@ -51,26 +51,31 @@ const transports = [
   new winston.transports.Console({
     format: logFormat,
   }),
-  
-  // Error log file
-  new DailyRotateFile({
-    filename: path.join('logs', 'error-%DATE%.log'),
-    datePattern: 'YYYY-MM-DD',
-    level: 'error',
-    format: fileLogFormat,
-    maxFiles: '30d',
-    maxSize: '20m',
-  }),
-  
-  // Combined log file
-  new DailyRotateFile({
-    filename: path.join('logs', 'combined-%DATE%.log'),
-    datePattern: 'YYYY-MM-DD',
-    format: fileLogFormat,
-    maxFiles: '30d',
-    maxSize: '20m',
-  }),
 ];
+
+// Add file transports only in non-serverless environments
+if (process.env.VERCEL !== '1' && process.env.AWS_LAMBDA_FUNCTION_NAME === undefined) {
+  transports.push(
+    // Error log file
+    new DailyRotateFile({
+      filename: path.join('logs', 'error-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      level: 'error',
+      format: fileLogFormat,
+      maxFiles: '30d',
+      maxSize: '20m',
+    }),
+    
+    // Combined log file
+    new DailyRotateFile({
+      filename: path.join('logs', 'combined-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      format: fileLogFormat,
+      maxFiles: '30d',
+      maxSize: '20m',
+    })
+  );
+}
 
 // Create the logger
 const logger = winston.createLogger({
