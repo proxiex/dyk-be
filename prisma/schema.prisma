@@ -1,0 +1,327 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  password          String
+  firstName         String?
+  lastName          String?
+  avatar            String?
+  dateOfBirth       DateTime?
+  timezone          String    @default("UTC")
+  isEmailVerified   Boolean   @default(false)
+  isActive          Boolean   @default(true)
+  role              UserRole  @default(USER)
+  
+  // Notification preferences
+  notificationsEnabled      Boolean @default(true)
+  dailyNotificationTime     String  @default("09:00")
+  maxNotificationsPerDay    Int     @default(3)
+  weekendNotifications      Boolean @default(true)
+  
+  // Learning preferences
+  difficultyLevel           DifficultyLevel @default(MEDIUM)
+  languagePreference        String          @default("en")
+  
+  // Statistics
+  totalFactsViewed          Int    @default(0)
+  totalFactsLiked           Int    @default(0)
+  totalFactsBookmarked      Int    @default(0)
+  currentStreak             Int    @default(0)
+  longestStreak             Int    @default(0)
+  lastActiveDate            DateTime?
+  
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+  
+  // Relations
+  sessions          UserSession[]
+  userFacts         UserFact[]
+  notifications     Notification[]
+  userCategories    UserCategory[]
+  auditLogs         AuditLog[]
+  
+  @@map("users")
+}
+
+model UserSession {
+  id           String   @id @default(uuid())
+  userId       String
+  refreshToken String   @unique
+  deviceId     String?
+  deviceType   String?
+  ipAddress    String?
+  userAgent    String?
+  isActive     Boolean  @default(true)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_sessions")
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  icon        String?
+  color       String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  facts          Fact[]
+  userCategories UserCategory[]
+  
+  @@map("categories")
+}
+
+model UserCategory {
+  id         String   @id @default(uuid())
+  userId     String
+  categoryId String
+  isEnabled  Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, categoryId])
+  @@map("user_categories")
+}
+
+model Fact {
+  id              String          @id @default(uuid())
+  title           String
+  content         String
+  shortContent    String?
+  source          String?
+  sourceUrl       String?
+  imageUrl        String?
+  videoUrl        String?
+  categoryId      String
+  difficulty      DifficultyLevel @default(MEDIUM)
+  tags            String[]
+  language        String          @default("en")
+  
+  // Content flags
+  isApproved      Boolean @default(false)
+  isFeatured      Boolean @default(false)
+  isActive        Boolean @default(true)
+  
+  // Engagement metrics
+  viewCount       Int @default(0)
+  likeCount       Int @default(0)
+  shareCount      Int @default(0)
+  bookmarkCount   Int @default(0)
+  
+  // Publishing
+  publishedAt     DateTime?
+  createdBy       String?
+  approvedBy      String?
+  approvedAt      DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  category    Category   @relation(fields: [categoryId], references: [id])
+  userFacts   UserFact[]
+  
+  @@index([categoryId])
+  @@index([isApproved, isActive])
+  @@index([publishedAt])
+  @@index([difficulty])
+  @@map("facts")
+}
+
+model UserFact {
+  id              String              @id @default(uuid())
+  userId          String
+  factId          String
+  
+  // Interaction tracking
+  isViewed        Boolean             @default(false)
+  isLiked         Boolean             @default(false)
+  isBookmarked    Boolean             @default(false)
+  isShared        Boolean             @default(false)
+  
+  // Delivery tracking
+  deliveryStatus  NotificationStatus  @default(PENDING)
+  deliveredAt     DateTime?
+  viewedAt        DateTime?
+  
+  // Engagement metrics
+  timeSpent       Int?                // seconds spent viewing
+  engagementScore Float?              // calculated engagement score
+  
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fact Fact @relation(fields: [factId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, factId])
+  @@index([userId, deliveryStatus])
+  @@index([factId])
+  @@map("user_facts")
+}
+
+model Notification {
+  id              String             @id @default(uuid())
+  userId          String
+  factId          String?
+  
+  title           String
+  body            String
+  imageUrl        String?
+  
+  // Delivery details
+  status          NotificationStatus @default(PENDING)
+  scheduledFor    DateTime
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  openedAt        DateTime?
+  
+  // Firebase details
+  fcmToken        String?
+  fcmMessageId    String?
+  fcmResponse     String?
+  
+  // Retry logic
+  retryCount      Int                @default(0)
+  maxRetries      Int                @default(3)
+  nextRetryAt     DateTime?
+  
+  // Error tracking
+  errorMessage    String?
+  errorCode       String?
+  
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, status])
+  @@index([scheduledFor])
+  @@index([status, nextRetryAt])
+  @@map("notifications")
+}
+
+model Analytics {
+  id              String      @id @default(uuid())
+  
+  // Event details
+  eventType       EventType
+  eventData       Json
+  
+  // User context
+  userId          String?
+  sessionId       String?
+  deviceId        String?
+  
+  // Request context
+  ipAddress       String?
+  userAgent       String?
+  referer         String?
+  
+  // Fact context (if applicable)
+  factId          String?
+  categoryId      String?
+  
+  // Timing
+  timestamp       DateTime    @default(now())
+  processingTime  Int?        // milliseconds
+  
+  @@index([eventType, timestamp])
+  @@index([userId, timestamp])
+  @@index([factId])
+  @@map("analytics")
+}
+
+model AuditLog {
+  id            String      @id @default(uuid())
+  userId        String?
+  action        String
+  resource      String
+  resourceId    String?
+  changes       Json?
+  ipAddress     String?
+  userAgent     String?
+  timestamp     DateTime    @default(now())
+  
+  user User? @relation(fields: [userId], references: [id])
+  
+  @@index([userId, timestamp])
+  @@index([resource, resourceId])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("system_config")
+}
+
+// Enums
+enum UserRole {
+  USER
+  ADMIN
+  MODERATOR
+  SUPER_ADMIN
+}
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+  EXPERT
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  OPENED
+  FAILED
+  CANCELLED
+}
+
+enum EventType {
+  USER_REGISTERED
+  USER_LOGIN
+  USER_LOGOUT
+  FACT_VIEWED
+  FACT_LIKED
+  FACT_UNLIKED
+  FACT_BOOKMARKED
+  FACT_UNBOOKMARKED
+  FACT_SHARED
+  NOTIFICATION_SENT
+  NOTIFICATION_OPENED
+  SEARCH_PERFORMED
+  CATEGORY_SELECTED
+  SETTINGS_UPDATED
+  PASSWORD_RESET
+  EMAIL_VERIFIED
+}
