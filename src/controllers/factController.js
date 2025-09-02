@@ -330,7 +330,7 @@ const searchFacts = asyncHandler(async (req, res) => {
 });
 
 /**
- * Get single fact details
+ * Get single fact details with related facts
  */
 const getFactDetails = asyncHandler(async (req, res) => {
   const { id: factId } = req.params;
@@ -366,8 +366,103 @@ const getFactDetails = asyncHandler(async (req, res) => {
     await cache.set(cacheKeys.factDetails(factId), fact, 3600); // 1 hour
   }
 
+  // Get related facts
+  const relatedFactsCacheKey = `related_facts:${factId}`;
+  let relatedFacts = await cache.get(relatedFactsCacheKey);
+
+  if (!relatedFacts) {
+    // Find related facts based on category, tags, and difficulty
+    const relatedFactsQuery = {
+      where: {
+        id: {
+          not: factId, // Exclude current fact
+        },
+        isApproved: true,
+        isActive: true,
+        publishedAt: {
+          lte: new Date(),
+        },
+        OR: [
+          // Same category
+          {
+            categoryId: fact.categoryId,
+          },
+          // Similar difficulty
+          {
+            difficulty: fact.difficulty,
+          },
+          // Overlapping tags
+          ...(fact.tags && fact.tags.length > 0 ? [{
+            tags: {
+              hasSome: fact.tags,
+            },
+          }] : []),
+        ],
+      },
+      include: {
+        category: {
+          select: {
+            id: true,
+            name: true,
+            icon: true,
+            color: true,
+          },
+        },
+      },
+      orderBy: [
+        { categoryId: fact.categoryId ? 'desc' : 'asc' }, // Prioritize same category
+        { isFeatured: 'desc' },
+        { viewCount: 'desc' },
+        { createdAt: 'desc' },
+      ],
+      take: 3,
+    };
+
+    relatedFacts = await prisma.fact.findMany(relatedFactsQuery);
+
+    // If we don't have enough related facts, get popular facts from same category
+    if (relatedFacts.length < 3) {
+      const additionalFacts = await prisma.fact.findMany({
+        where: {
+          id: {
+            not: factId,
+            notIn: relatedFacts.map(f => f.id),
+          },
+          categoryId: fact.categoryId,
+          isApproved: true,
+          isActive: true,
+          publishedAt: {
+            lte: new Date(),
+          },
+        },
+        include: {
+          category: {
+            select: {
+              id: true,
+              name: true,
+              icon: true,
+              color: true,
+            },
+          },
+        },
+        orderBy: [
+          { isFeatured: 'desc' },
+          { viewCount: 'desc' },
+        ],
+        take: 3 - relatedFacts.length,
+      });
+
+      relatedFacts = [...relatedFacts, ...additionalFacts];
+    }
+
+    // Cache related facts for 30 minutes
+    await cache.set(relatedFactsCacheKey, relatedFacts, 1800);
+  }
+
   // Get user interaction data if authenticated
   let userInteraction = null;
+  let relatedFactsWithUserData = relatedFacts;
+
   if (userId) {
     userInteraction = await prisma.userFact.findUnique({
       where: {
@@ -383,6 +478,38 @@ const getFactDetails = asyncHandler(async (req, res) => {
         viewedAt: true,
       },
     });
+
+    // Get user interaction data for related facts
+    if (relatedFacts.length > 0) {
+      const relatedFactIds = relatedFacts.map(f => f.id);
+      const relatedUserFacts = await prisma.userFact.findMany({
+        where: {
+          userId,
+          factId: { in: relatedFactIds },
+        },
+        select: {
+          factId: true,
+          isLiked: true,
+          isBookmarked: true,
+          isViewed: true,
+        },
+      });
+
+      const userFactMap = relatedUserFacts.reduce((acc, uf) => {
+        acc[uf.factId] = uf;
+        return acc;
+      }, {});
+
+      relatedFactsWithUserData = relatedFacts.map(fact => {
+        const userFact = userFactMap[fact.id] || {};
+        return {
+          ...fact,
+          isLiked: userFact.isLiked || false,
+          isBookmarked: userFact.isBookmarked || false,
+          isViewed: userFact.isViewed || false,
+        };
+      });
+    }
 
     // Mark as viewed if not already
     if (!userInteraction?.isViewed) {
@@ -440,6 +567,7 @@ const getFactDetails = asyncHandler(async (req, res) => {
       isViewed: userInteraction.isViewed,
       viewedAt: userInteraction.viewedAt,
     }),
+    relatedFacts: relatedFactsWithUserData,
   };
 
   successResponse(res, 'Fact details retrieved successfully', { fact: response });
