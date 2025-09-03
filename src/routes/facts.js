@@ -151,11 +151,22 @@ router.get('/daily', optionalAuthenticate, getDailyFacts);
  * @swagger
  * /api/facts/categories:
  *   get:
- *     summary: Get all categories
+ *     summary: Get all categories with their facts
  *     tags: [Facts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 20
+ *           default: 5
+ *         description: Number of facts to return per category
  *     responses:
  *       200:
- *         description: Categories retrieved successfully
+ *         description: Categories with facts retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -171,9 +182,32 @@ router.get('/daily', optionalAuthenticate, getDailyFacts);
  *                     categories:
  *                       type: array
  *                       items:
- *                         $ref: '#/components/schemas/Category'
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                             format: uuid
+ *                           name:
+ *                             type: string
+ *                           description:
+ *                             type: string
+ *                           icon:
+ *                             type: string
+ *                           color:
+ *                             type: string
+ *                           sortOrder:
+ *                             type: integer
+ *                           facts:
+ *                             type: array
+ *                             items:
+ *                               $ref: '#/components/schemas/Fact'
+ *                           totalFactsCount:
+ *                             type: integer
+ *                             description: Total number of facts in this category
+ *       401:
+ *         description: Unauthorized (optional)
  */
-router.get('/categories', getCategories);
+router.get('/categories', optionalAuthenticate, getCategories);
 
 /**
  * @swagger

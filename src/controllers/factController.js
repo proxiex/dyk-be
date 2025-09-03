@@ -55,40 +55,40 @@ const getDailyFacts = asyncHandler(async (req, res) => {
       });
     }
 
-    // Format response for user interaction data
-    if (userId && facts.length > 0) {
-      const factIds = facts.map(f => f.id);
-      const userFacts = await prisma.userFact.findMany({
-        where: {
-          userId,
-          factId: { in: factIds },
-        },
-        select: {
-          factId: true,
-          isLiked: true,
-          isBookmarked: true,
-          isViewed: true,
-        },
-      });
-
-      const userFactMap = userFacts.reduce((acc, uf) => {
-        acc[uf.factId] = uf;
-        return acc;
-      }, {});
-
-      facts = facts.map(fact => {
-        const userFact = userFactMap[fact.id] || {};
-        return {
-          ...fact,
-          isLiked: userFact.isLiked || false,
-          isBookmarked: userFact.isBookmarked || false,
-          isViewed: userFact.isViewed || false,
-        };
-      });
-    }
-
-    // Cache the results
+    // Cache the results (without user-specific data)
     await cache.set(cacheKey, facts, 3600); // 1 hour
+  }
+
+  // Always add user interaction data for authenticated users, even from cache
+  if (userId && facts.length > 0) {
+    const factIds = facts.map(f => f.id);
+    const userFacts = await prisma.userFact.findMany({
+      where: {
+        userId,
+        factId: { in: factIds },
+      },
+      select: {
+        factId: true,
+        isLiked: true,
+        isBookmarked: true,
+        isViewed: true,
+      },
+    });
+
+    const userFactMap = userFacts.reduce((acc, uf) => {
+      acc[uf.factId] = uf;
+      return acc;
+    }, {});
+
+    facts = facts.map(fact => {
+      const userFact = userFactMap[fact.id] || {};
+      return {
+        ...fact,
+        isLiked: userFact.isLiked || false,
+        isBookmarked: userFact.isBookmarked || false,
+        isViewed: userFact.isViewed || false,
+      };
+    });
   }
 
   // Track analytics if user is authenticated
@@ -787,14 +787,19 @@ const shareFact = asyncHandler(async (req, res) => {
 });
 
 /**
- * Get all categories
+ * Get all categories with their facts
  */
 const getCategories = asyncHandler(async (req, res) => {
+  const userId = req.user?.id;
+  const limit = parseInt(req.query.limit) || 5; // Default 5 facts per category
+  
   // Try to get from cache first
-  let categories = await cache.get(cacheKeys.categories());
+  const cacheKey = userId ? `categories_with_facts:${userId}:${limit}` : `categories_with_facts:anonymous:${limit}`;
+  let categoriesWithFacts = await cache.get(cacheKey);
 
-  if (!categories) {
-    categories = await prisma.category.findMany({
+  if (!categoriesWithFacts) {
+    // Get categories with facts
+    const categories = await prisma.category.findMany({
       where: { isActive: true },
       select: {
         id: true,
@@ -803,17 +808,94 @@ const getCategories = asyncHandler(async (req, res) => {
         icon: true,
         color: true,
         sortOrder: true,
+        facts: {
+          where: {
+            isApproved: true,
+            isActive: true,
+            publishedAt: {
+              lte: new Date(),
+            },
+          },
+          select: {
+            id: true,
+            title: true,
+            shortContent: true,
+            imageUrl: true,
+            difficulty: true,
+            tags: true,
+            isFeatured: true,
+            viewCount: true,
+            likeCount: true,
+            shareCount: true,
+            bookmarkCount: true,
+            publishedAt: true,
+            createdAt: true,
+            ...(userId && {
+              userFacts: {
+                where: { userId },
+                select: {
+                  isLiked: true,
+                  isBookmarked: true,
+                  isViewed: true,
+                },
+              },
+            }),
+          },
+          orderBy: [
+            { isFeatured: 'desc' },
+            { viewCount: 'desc' },
+            { publishedAt: 'desc' },
+          ],
+          take: limit,
+        },
+        _count: {
+          select: {
+            facts: {
+              where: {
+                isApproved: true,
+                isActive: true,
+                publishedAt: {
+                  lte: new Date(),
+                },
+              },
+            },
+          },
+        },
       },
       orderBy: {
         sortOrder: 'asc',
       },
     });
 
-    // Cache for 24 hours
-    await cache.set(cacheKeys.categories(), categories, 24 * 60 * 60);
+    // Format response with user interaction data for facts
+    categoriesWithFacts = categories.map(category => {
+      const formattedFacts = category.facts.map(fact => {
+        const userFact = fact.userFacts?.[0] || {};
+        const { userFacts, ...factData } = fact;
+        
+        return {
+          ...factData,
+          ...(userId && {
+            isLiked: userFact.isLiked || false,
+            isBookmarked: userFact.isBookmarked || false,
+            isViewed: userFact.isViewed || false,
+          }),
+        };
+      });
+
+      return {
+        ...category,
+        facts: formattedFacts,
+        totalFactsCount: category._count.facts,
+        _count: undefined, // Remove _count from response
+      };
+    });
+
+    // Cache for 1 hour (shorter than before since we include facts)
+    await cache.set(cacheKey, categoriesWithFacts, 3600);
   }
 
-  successResponse(res, 'Categories retrieved successfully', { categories });
+  successResponse(res, 'Categories with facts retrieved successfully', { categories: categoriesWithFacts });
 });
 
 module.exports = {
